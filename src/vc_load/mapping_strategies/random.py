@@ -1,8 +1,11 @@
+from __future__ import annotations
+
 import random
 
 import numpy as np
 
 from .mapping_strategies import BaseMappingStrategy
+from ..dataset.perturbation_dataset import PerturbationDataset
 
 
 class RandomMappingStrategy(BaseMappingStrategy):
@@ -31,7 +34,7 @@ class RandomMappingStrategy(BaseMappingStrategy):
 
     def register_split_indices(
         self,
-        dataset: "PerturbationDataset",
+        dataset: PerturbationDataset,
         split: str,
         perturbed_indices: np.ndarray,
         control_indices: np.ndarray,
@@ -57,7 +60,7 @@ class RandomMappingStrategy(BaseMappingStrategy):
 
     # #
     def get_control_indices(
-        self, dataset: "PerturbationDataset", split: str, perturbed_idx: int
+        self, dataset: PerturbationDataset, split: str, perturbed_idx: int
     ) -> np.ndarray:
         """
         Returns n_basal_samples control indices that are from the same cell type as the perturbed cell.
@@ -78,7 +81,7 @@ class RandomMappingStrategy(BaseMappingStrategy):
         return np.array(selected_indices)
 
     def get_control_index(
-        self, dataset: "PerturbationDataset", split: str, perturbed_idx: int
+        self, dataset: PerturbationDataset, split: str, perturbed_idx: int
     ):
         """
         Returns a single control index from the same cell type as the perturbed cell.

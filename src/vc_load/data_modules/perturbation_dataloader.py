@@ -254,8 +254,7 @@ class PerturbationDataModule(LightningDataModule):
                     ct_code = np.where(cache.cell_type_categories == ct)[0][0]
                     mask = cache.cell_type_codes == ct_code
 
-                # TODO: Identify exact exception (probably IndexError)
-                except:
+                except IndexError:
                     # Skip cell type if not found in this file
                     continue
 
@@ -293,7 +292,11 @@ class PerturbationDataModule(LightningDataModule):
 
             end_time = time.time()
             logger.info(
-                f"Cell type {ct}: {len(train_perts)} train perts, {len(test_perts)} test perts in {end_time - start_time:.2f} seconds."
+                "Cell type %s: %d train perts, %d test perts in %.2f seconds.",
+                ct,
+                len(train_perts),
+                len(test_perts),
+                end_time - start_time,
             )
 
     def _setup_datasets(self):
@@ -686,18 +689,6 @@ class PerturbationDataModule(LightningDataModule):
             cell_types[cell_type] = fpath
         return cell_types
 
-    def _group_specs_by_dataset(
-        self, specs: List[TaskSpec]
-    ) -> Dict[str, List[TaskSpec]]:
-        """
-        Group a list of TaskSpecs by dataset name.
-        Return dict: {dataset_name -> [TaskSpec, TaskSpec, ...]}
-        """
-        dmap = {}
-        for spec in specs:
-            dmap.setdefault(spec.dataset, []).append(spec)
-        return dmap
-
     def _get_test_cell_types(
         self, dataset: str, test_map: Dict[str, List[TaskSpec]]
     ) -> Set[str]:
@@ -757,10 +748,9 @@ class PerturbationDataModule(LightningDataModule):
         if len(self.train_datasets) == 0:
             return None
         use_int_counts = "int_counts" in self.__dict__ and self.int_counts
-        collate_fn = lambda batch: PerturbationDataset.collate_fn(
-            batch,
-            int_counts=use_int_counts,
-        )
+
+        def collate_fn(batch, *, _use_int_counts=use_int_counts):
+            return PerturbationDataset.collate_fn(batch, int_counts=_use_int_counts)
         ds = MetadataConcatDataset(self.train_datasets)
         use_batch = self.basal_mapping_strategy == "batch"
         sampler = PerturbationBatchSampler(
@@ -784,10 +774,9 @@ class PerturbationDataModule(LightningDataModule):
         if len(self.val_datasets) == 0:
             return None
         use_int_counts = "int_counts" in self.__dict__ and self.int_counts
-        collate_fn = lambda batch: PerturbationDataset.collate_fn(
-            batch,
-            int_counts=use_int_counts,
-        )
+
+        def collate_fn(batch, *, _use_int_counts=use_int_counts):
+            return PerturbationDataset.collate_fn(batch, int_counts=_use_int_counts)
         ds = MetadataConcatDataset(self.val_datasets)
         use_batch = self.basal_mapping_strategy == "batch"
         sampler = PerturbationBatchSampler(
@@ -810,10 +799,9 @@ class PerturbationDataModule(LightningDataModule):
         if len(self.test_datasets) == 0:
             return None
         use_int_counts = "int_counts" in self.__dict__ and self.int_counts
-        collate_fn = lambda batch: PerturbationDataset.collate_fn(
-            batch,
-            int_counts=use_int_counts,
-        )
+
+        def collate_fn(batch, *, _use_int_counts=use_int_counts):
+            return PerturbationDataset.collate_fn(batch, int_counts=_use_int_counts)
         ds = MetadataConcatDataset(self.test_datasets)
         use_batch = self.basal_mapping_strategy == "batch"
         # batch size 1 for test - since we don't want to oversample. This logic should probably be cleaned up
@@ -837,10 +825,9 @@ class PerturbationDataModule(LightningDataModule):
         if len(self.test_datasets) == 0:
             return None
         use_int_counts = "int_counts" in self.__dict__ and self.int_counts
-        collate_fn = lambda batch: PerturbationDataset.collate_fn(
-            batch,
-            int_counts=use_int_counts,
-        )
+
+        def collate_fn(batch, *, _use_int_counts=use_int_counts):
+            return PerturbationDataset.collate_fn(batch, int_counts=_use_int_counts)
         ds = MetadataConcatDataset(self.test_datasets)
         use_batch = self.basal_mapping_strategy == "batch"
         sampler = PerturbationBatchSampler(
@@ -887,10 +874,9 @@ class PerturbationDataModule(LightningDataModule):
             input_dim = underlying_ds.n_genes
 
         gene_dim = underlying_ds.n_genes
-        # gene_dim = underlying_ds.get_num_hvgs()
         try:
             hvg_dim = underlying_ds.get_num_hvgs()
-        except:
+        except AttributeError:
             assert self.embed_key is None, "No X_hvg detected, using raw .X"
             hvg_dim = gene_dim
 

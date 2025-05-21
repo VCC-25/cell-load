@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 import logging
 import time
 from typing import Iterator, List
 
 import numpy as np
-from torch.utils.data import Sampler
+from torch.utils.data import Sampler, Subset
 
 from ..dataset.perturbation_dataset import PerturbationDataset
 from ..utils.data_utils import H5MetadataCache
+from .perturbation_dataloader import MetadataConcatDataset
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +26,7 @@ class PerturbationBatchSampler(Sampler):
 
     def __init__(
         self,
-        dataset: "MetadataConcatDataset",
+        dataset: MetadataConcatDataset,
         batch_size: int,
         drop_last: bool = False,
         cell_sentence_len: int = 512,
@@ -122,7 +125,7 @@ class PerturbationBatchSampler(Sampler):
 
         return all_batches
 
-    def _process_subset(self, global_offset: int, subset: "Subset") -> List[List[int]]:
+    def _process_subset(self, global_offset: int, subset: Subset) -> List[List[int]]:
         """
         Process a single subset to create batches based on H5 codes.
 
@@ -143,8 +146,6 @@ class PerturbationBatchSampler(Sampler):
 
         if "use_batch" in self.__dict__ and self.use_batch:
             # If using batch, we need to use the batch codes instead of cell type codes.
-            batch_codes = cache.batch_codes[indices]
-            # Also get batch codes if grouping by batch is desired.
             batch_codes = cache.batch_codes[indices]
             dt = np.dtype(
                 [
