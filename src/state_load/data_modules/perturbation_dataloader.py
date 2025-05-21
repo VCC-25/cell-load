@@ -686,18 +686,6 @@ class PerturbationDataModule(LightningDataModule):
             cell_types[cell_type] = fpath
         return cell_types
 
-    def _group_specs_by_dataset(
-        self, specs: List[TaskSpec]
-    ) -> Dict[str, List[TaskSpec]]:
-        """
-        Group a list of TaskSpecs by dataset name.
-        Return dict: {dataset_name -> [TaskSpec, TaskSpec, ...]}
-        """
-        dmap = {}
-        for spec in specs:
-            dmap.setdefault(spec.dataset, []).append(spec)
-        return dmap
-
     def _get_test_cell_types(
         self, dataset: str, test_map: Dict[str, List[TaskSpec]]
     ) -> Set[str]:

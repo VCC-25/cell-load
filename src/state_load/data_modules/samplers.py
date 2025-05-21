@@ -144,8 +144,6 @@ class PerturbationBatchSampler(Sampler):
         if "use_batch" in self.__dict__ and self.use_batch:
             # If using batch, we need to use the batch codes instead of cell type codes.
             batch_codes = cache.batch_codes[indices]
-            # Also get batch codes if grouping by batch is desired.
-            batch_codes = cache.batch_codes[indices]
             dt = np.dtype(
                 [
                     ("batch", batch_codes.dtype),
