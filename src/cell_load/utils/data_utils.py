@@ -278,7 +278,8 @@ def is_on_target_knockdown(
 
     if target_gene not in adata.var_names:
         print(f"Gene {target_gene!r} not found in `adata.var_names`.")
-        return 1
+        ## Assumes knockdown was successful
+        return True
 
     gene_idx = adata.var_names.get_loc(target_gene)
     X = adata.layers[layer] if layer is not None else adata.X
@@ -291,10 +292,9 @@ def is_on_target_knockdown(
 
     control_mean = _mean(X[control_cells, gene_idx])
     if control_mean == 0:
-        raise ValueError(
-            f"Mean {target_gene!r} expression in control cells is zero; "
-            "cannot compute knock-down ratio."
-        )
+        print(f"Mean {target_gene!r} expression in control cells is zero")
+        ## No effect of knockdown if no basal expression
+        return False
 
     perturbed_mean = _mean(X[perturbed_cells, gene_idx])
     knockdown_ratio = perturbed_mean / control_mean
@@ -363,17 +363,15 @@ def filter_on_target_knockdown(
         if pert not in control_mean_cache:
             ctrl_mean = _mean(X[control_cells, gene_idx])
             if ctrl_mean == 0:
-                raise ValueError(
-                    f"Mean {pert!r} expression in control cells is zero; "
-                    "cannot compute knock-down ratio."
-                )
+                print(f"Mean {pert!r} expression in control cells is zero.")
+                continue  
             control_mean_cache[pert] = ctrl_mean
         else:
             ctrl_mean = control_mean_cache[pert]
 
         pert_cells = perts == pert
         expr_vals = (
-            X[pert_cells, gene_idx].A1 if sp.issparse(X) else X[pert_cells, gene_idx]
+            X[pert_cells, gene_idx].toarray().flatten() if sp.issparse(X) else X[pert_cells, gene_idx]
         )
         ratios = expr_vals / ctrl_mean
         keep_mask[pert_cells] = ratios < cell_residual_expression
