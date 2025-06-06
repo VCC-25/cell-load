@@ -1,4 +1,3 @@
-import torch
 from torch.utils.data import DataLoader
 from cell_load.dataset.cell_sentence_dataset import FilteredGenesCounts
 from cell_load.dataset.cell_sentence_dataset import CellSentenceCollator

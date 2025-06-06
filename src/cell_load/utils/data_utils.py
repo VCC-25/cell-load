@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 import scipy.sparse as sp
-from typing import List, Optional
+from typing import Optional
 from .singleton import Singleton
 
 log = logging.getLogger(__name__)

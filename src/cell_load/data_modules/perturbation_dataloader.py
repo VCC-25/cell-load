@@ -1,7 +1,6 @@
 import logging
-from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Set, Tuple
+from typing import Dict, List, Literal, Optional, Set
 
 import h5py
 import numpy as np
