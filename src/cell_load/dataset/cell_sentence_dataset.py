@@ -3,13 +3,15 @@ cell_sentence_dataset.py
 
 Dataset classes and utilities for handling single-cell gene expression data in sentence form.
 
-This module provides PyTorch Dataset classes and related utilities for loading, filtering, and collating single-cell gene expression data and integrating gene/protein embeddings.
+This module provides PyTorch Dataset classes and related utilities for loading, filtering, and collating
+single-cell gene expression data and integrating gene/protein embeddings.
 """
 
 import h5py
 import logging
 import torch
 import torch.utils.data as data
+import torch.nn.functional as F
 import functools
 import numpy as np
 from typing import Dict
@@ -180,7 +182,7 @@ class FilteredGenesCounts(CellSentenceDataset):
             self.shapes_dict,
             self.dataset_path_map,
             self.dataset_group_map,
-        ) = utils.get_shapes_dict("/home/aadduri/state/h5ad_all.csv")
+        ) = utils.get_shapes_dict(getattr(cfg, 'h5ad_csv_path', ''))
 
         emb_cfg = utils.get_embedding_cfg(self.cfg)
         try:
@@ -227,7 +229,7 @@ class FilteredGenesCounts(CellSentenceDataset):
                             gene_names = np.array(
                                 [g.decode("utf-8") for g in a["/var/gene_name"][:]]
                             )  # Decode byte strings
-                        except:
+                        except KeyError:
                             gene_categories = a["/var/gene_name/categories"][:]
                             gene_codes = np.array(a["/var/gene_name/codes"][:])
                             gene_names = np.array(
@@ -305,7 +307,7 @@ class CellSentenceCollator(object):
         for dataset_name, ds_emb_idxs in self.dataset_to_protein_embeddings.items():
             # make sure tensor with long data type
             ds_emb_idxs = torch.tensor(ds_emb_idxs, dtype=torch.long)
-            # assert ds_emb_idxs.unique().numel() == ds_emb_idxs.numel(), f"duplicate global IDs in dataset {dataset_name}!"
+            
 
             # Create a tensor filled with -1 (indicating not present in this dataset)
             reverse_mapping = torch.full((self.global_size,), -1, dtype=torch.int64)
@@ -482,12 +484,14 @@ class CellSentenceCollator(object):
         max_val = torch.max(counts).item()
 
         # Primary heuristic: very large individual counts => raw counts
-        if max_val > RAW_COUNT_HEURISTIC_THRESHOLD:
+        threshold = getattr(self.cfg, 'RAW_COUNT_HEURISTIC_THRESHOLD', 35)
+        if max_val > threshold:
             return True
 
         # Ambiguous case: try undoing log1p
         total_umis = int(torch.expm1(counts).sum().item())
-        if total_umis > EXPONENTIATED_UMIS_LIMIT:
+        umi_limit = getattr(self.cfg, 'EXPONENTIATED_UMIS_LIMIT', 5_000_000)
+        if total_umis > umi_limit:
             return True
 
         return False
@@ -508,7 +512,7 @@ class CellSentenceCollator(object):
         if torch.any(counts_raw < 0):
             counts_raw = F.relu(counts_raw)
 
-        if self.is_raw_integer_counts(counts_raw):  # CAN WE CHANGE THIS TO INT VS REAL
+        if self.is_raw_integer_counts(counts_raw):  
             total_umis = int(counts_raw.sum(axis=1).item())
             count_expr_dist = counts_raw / counts_raw.sum(axis=1, keepdim=True)
             counts_raw = torch.log1p(counts_raw)
@@ -566,7 +570,7 @@ class CellSentenceCollator(object):
                 # Filter the dataset embedding indices based on the valid gene mask
                 ds_emb_idxs = ds_emb_idxs[valid_gene_mask]
             else:
-                # Our preprocessing is such that sometimes the ds emb idxs are already filtered
+                # our preprocessing is such that sometimes the ds emb idxs are already filtered
                 # in this case we do nothing to (no subsetting) but assert that the mask matches
                 assert valid_gene_mask.sum() == ds_emb_idxs.shape[0], (
                     f"Something wrong with filtering or mask for dataset {dataset}"
@@ -610,7 +614,8 @@ class CellSentenceCollator(object):
             # this is either the number of positive genes, or the first pad_length / 2 most expressed genes
             # the first is only used if you have more expressed genes than pad_length / 2
             assert self.cfg.model.counts
-            # shuffle before argsort - randomly break ties so we select random unexpressed genes each time, if pad_length > num_non_zero genes
+            # shuffle before argsort - randomly break ties so we select random unexpressed genes each time.
+
             indices = torch.randperm(cell.shape[-1])
             shuffled_cell = cell[indices]
             shuffled_genes_ranked_exp = torch.argsort(shuffled_cell, descending=True)
@@ -682,13 +687,13 @@ class CellSentenceCollator(object):
                 task_sentence[c, unshared_num:] = (
                     shared_genes  # in the old impl these are global gene indices
                 )
-                # task_sentence[c, unshared_num:] = ds_emb_idxs[shared_genes.to(torch.int32)] # in the new impl these are local gene indices
+
 
                 # convert the shared_genes, which are global indices, to the dataset specific indices
                 local_indices = self.global_to_local[dataset][shared_genes].to(
                     cell.device
                 )  # in the old impl these are global gene indices
-                # local_indices = shared_genes # in the new impl these are local gene indices
+
 
                 shared_counts = torch.zeros(
                     local_indices.shape, dtype=cell.dtype, device=cell.device
