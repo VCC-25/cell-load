@@ -182,7 +182,7 @@ class FilteredGenesCounts(CellSentenceDataset):
             self.shapes_dict,
             self.dataset_path_map,
             self.dataset_group_map,
-        ) = utils.get_shapes_dict(getattr(cfg, 'h5ad_csv_path', ''))
+        ) = utils.get_shapes_dict(getattr(cfg, "h5ad_csv_path", ""))
 
         emb_cfg = utils.get_embedding_cfg(self.cfg)
         try:
@@ -307,7 +307,6 @@ class CellSentenceCollator(object):
         for dataset_name, ds_emb_idxs in self.dataset_to_protein_embeddings.items():
             # make sure tensor with long data type
             ds_emb_idxs = torch.tensor(ds_emb_idxs, dtype=torch.long)
-            
 
             # Create a tensor filled with -1 (indicating not present in this dataset)
             reverse_mapping = torch.full((self.global_size,), -1, dtype=torch.int64)
@@ -484,13 +483,13 @@ class CellSentenceCollator(object):
         max_val = torch.max(counts).item()
 
         # Primary heuristic: very large individual counts => raw counts
-        threshold = getattr(self.cfg, 'RAW_COUNT_HEURISTIC_THRESHOLD', 35)
+        threshold = getattr(self.cfg, "RAW_COUNT_HEURISTIC_THRESHOLD", 35)
         if max_val > threshold:
             return True
 
         # Ambiguous case: try undoing log1p
         total_umis = int(torch.expm1(counts).sum().item())
-        umi_limit = getattr(self.cfg, 'EXPONENTIATED_UMIS_LIMIT', 5_000_000)
+        umi_limit = getattr(self.cfg, "EXPONENTIATED_UMIS_LIMIT", 5_000_000)
         if total_umis > umi_limit:
             return True
 
@@ -512,7 +511,7 @@ class CellSentenceCollator(object):
         if torch.any(counts_raw < 0):
             counts_raw = F.relu(counts_raw)
 
-        if self.is_raw_integer_counts(counts_raw):  
+        if self.is_raw_integer_counts(counts_raw):
             total_umis = int(counts_raw.sum(axis=1).item())
             count_expr_dist = counts_raw / counts_raw.sum(axis=1, keepdim=True)
             counts_raw = torch.log1p(counts_raw)
@@ -688,12 +687,10 @@ class CellSentenceCollator(object):
                     shared_genes  # in the old impl these are global gene indices
                 )
 
-
                 # convert the shared_genes, which are global indices, to the dataset specific indices
                 local_indices = self.global_to_local[dataset][shared_genes].to(
                     cell.device
                 )  # in the old impl these are global gene indices
-
 
                 shared_counts = torch.zeros(
                     local_indices.shape, dtype=cell.dtype, device=cell.device

@@ -29,8 +29,8 @@ class ExperimentConfig:
     h5ad_csv_path: str = ""
 
     # Thresholds for raw count heuristics
-    RAW_COUNT_HEURISTIC_THRESHOLD: int = 1000
-    EXPONENTIATED_UMIS_LIMIT: int = 1000000
+    RAW_COUNT_HEURISTIC_THRESHOLD: int = 35
+    EXPONENTIATED_UMIS_LIMIT: int = 5_000_000
 
     @classmethod
     def from_toml(cls, toml_path: str) -> "ExperimentConfig":
@@ -44,7 +44,9 @@ class ExperimentConfig:
             zeroshot=config.get("zeroshot", {}),
             fewshot=config.get("fewshot", {}),
             h5ad_csv_path=config.get("h5ad_csv_path", ""),
-            RAW_COUNT_HEURISTIC_THRESHOLD=config.get("RAW_COUNT_HEURISTIC_THRESHOLD", 1000),
+            RAW_COUNT_HEURISTIC_THRESHOLD=config.get(
+                "RAW_COUNT_HEURISTIC_THRESHOLD", 1000
+            ),
             EXPONENTIATED_UMIS_LIMIT=config.get("EXPONENTIATED_UMIS_LIMIT", 1000000),
         )
 
