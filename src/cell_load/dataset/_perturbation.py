@@ -1,6 +1,5 @@
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Union
 
 import h5py
 import numpy as np
@@ -26,11 +25,11 @@ class PerturbationDataset(Dataset):
     def __init__(
         self,
         name: str,
-        h5_path: Union[str, Path],
+        h5_path: str | Path,
         mapping_strategy: BaseMappingStrategy,
-        pert_onehot_map: Optional[Dict[str, torch.Tensor]] = None,
-        batch_onehot_map: Optional[Dict[str, torch.Tensor]] = None,
-        cell_type_onehot_map: Optional[Dict[str, torch.Tensor]] = None,
+        pert_onehot_map: dict[str, torch.Tensor] | None = None,
+        batch_onehot_map: dict[str, torch.Tensor] | None = None,
+        cell_type_onehot_map: dict[str, torch.Tensor] | None = None,
         pert_col: str = "gene",
         cell_type_key: str = "cell_type",
         batch_col: str = "gem_group",
@@ -320,7 +319,7 @@ class PerturbationDataset(Dataset):
         row_data = self.h5_file[f"/obsm/{key}"][idx]
         return torch.tensor(row_data, dtype=torch.float32)
 
-    def get_gene_names(self, output_space="all") -> List[str]:
+    def get_gene_names(self, output_space="all") -> list[str]:
         """
         Return the list of gene names from var/gene_name (or its categorical fallback).
 
@@ -334,7 +333,15 @@ class PerturbationDataset(Dataset):
             return x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x)
 
         try:
-            raw = self.h5_file["var/gene_name"][:]
+            if (
+                "var/gene_name/codes" in self.h5_file
+                and "var/gene_name/categories" in self.h5_file
+            ):
+                gene_codes = self.h5_file["var/gene_name/codes"][:]
+                gene_categories = self.h5_file["var/gene_name/categories"][:]
+                raw = gene_categories[gene_codes]
+            else:
+                raw = self.h5_file["var/gene_name"][:]
             if (
                 output_space == "gene"
                 and "highly_variable" in self.h5_file["/var"].keys()
@@ -489,7 +496,7 @@ class PerturbationDataset(Dataset):
             self, split, perturbed_indices, control_indices
         )
 
-    def _find_split_for_idx(self, idx: int) -> Optional[str]:
+    def _find_split_for_idx(self, idx: int) -> str | None:
         """Utility to find which split (train/val/test) this idx belongs to."""
         for s in self.split_perturbed_indices.keys():
             if (
@@ -513,7 +520,7 @@ class PerturbationDataset(Dataset):
                 try:
                     indices = self.h5_file["X/indices"][:]
                     n_cols = indices.max() + 1
-                except:
+                except KeyError:
                     n_cols = self.h5_file["obsm/X_hvg"].shape[1]
         return n_cols
 

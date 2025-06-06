@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
 
 
 class TaskType(Enum):
@@ -8,7 +7,8 @@ class TaskType(Enum):
     Different tasks at the dataset / cell type level.
 
     ZEROSHOT: if specified for a given dataset/cell_type, that cell type is only used in test
-    FEWSHOT: if specified for a given dataset/cell_type, that cell type is partially used in train / val and mostly used in test
+    FEWSHOT: if specified for a given dataset/cell_type, that cell type is partially used in train / val and
+             mostly used in test
     TRAINING: if specified for a given dataset/cell_type, that cell type is used in train / val and not in test
     """
 
@@ -22,11 +22,11 @@ class TaskSpec:
     """Specification for a training or testing task"""
 
     dataset: str  # e.g. "replogle"
-    cell_type: Optional[str] = None  # e.g. "jurkat"
+    cell_type: str | None = None  # e.g. "jurkat"
     task_type: TaskType = TaskType.ZEROSHOT
 
 
-def parse_dataset_specs(specs: List[str]) -> List[TaskSpec]:
+def parse_dataset_specs(specs: list[str]) -> list[TaskSpec]:
     """Parse dataset specifications into TaskSpec objects
 
     Format: dataset[_celltype][,tasktype]
