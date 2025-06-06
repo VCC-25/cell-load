@@ -3,6 +3,7 @@ from torch.utils.data import DataLoader
 from cell_load.dataset.cell_sentence_dataset import FilteredGenesCounts
 from cell_load.dataset.cell_sentence_dataset import CellSentenceCollator
 
+
 def create_cell_sentence_dataloader(
     cfg,
     workers=1,
@@ -19,15 +20,26 @@ def create_cell_sentence_dataloader(
     Either datasets and shape_dict or adata and adata_name should be provided
     """
     if datasets is None and adata is None:
-        raise ValueError("Either datasets and shape_dict or adata and adata_name should be provided")
+        raise ValueError(
+            "Either datasets and shape_dict or adata and adata_name should be provided"
+        )
     if adata is not None:
         shuffle = False
     if data_dir:
         cfg.model.data_dir = data_dir
-    dataset = FilteredGenesCounts(cfg, datasets=datasets, shape_dict=shape_dict, adata=adata, adata_name=adata_name)
+    dataset = FilteredGenesCounts(
+        cfg,
+        datasets=datasets,
+        shape_dict=shape_dict,
+        adata=adata,
+        adata_name=adata_name,
+    )
     if sentence_collator is None:
         sentence_collator = CellSentenceCollator(
-            cfg, valid_gene_mask=dataset.valid_gene_index, ds_emb_mapping_inference=dataset.ds_emb_map, is_train=False
+            cfg,
+            valid_gene_mask=dataset.valid_gene_index,
+            ds_emb_mapping_inference=dataset.ds_emb_map,
+            is_train=False,
         )
     sentence_collator.training = False
     dataloader = DataLoader(
