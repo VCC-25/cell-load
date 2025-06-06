@@ -4,7 +4,7 @@ from cell_load.dataset.cell_sentence_dataset import FilteredGenesCounts
 from cell_load.dataset.cell_sentence_dataset import CellSentenceCollator
 
 
-def create_cell_sentence_dataloader(
+def create_dataloader(
     cfg,
     workers=1,
     data_dir=None,
@@ -23,10 +23,14 @@ def create_cell_sentence_dataloader(
         raise ValueError(
             "Either datasets and shape_dict or adata and adata_name should be provided"
         )
+
     if adata is not None:
         shuffle = False
+
     if data_dir:
         cfg.model.data_dir = data_dir
+        # ? utils.get_dataset_cfg(cfg).data_dir = data_dir
+
     dataset = FilteredGenesCounts(
         cfg,
         datasets=datasets,
@@ -41,7 +45,10 @@ def create_cell_sentence_dataloader(
             ds_emb_mapping_inference=dataset.ds_emb_map,
             is_train=False,
         )
+
+    # validation should not use cell augmentations
     sentence_collator.training = False
+
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.model.batch_size,
