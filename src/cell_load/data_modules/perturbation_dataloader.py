@@ -578,7 +578,7 @@ class PerturbationDataModule(LightningDataModule):
             test_ctrl_indices = ctrl_indices_shuffled[
                 n_ctrl_val : n_ctrl_val + n_ctrl_test
             ]
-            train_ctrl_indices = ctrl_indices_shuffled[n_ctrl_val + n_ctrl_test :]
+            train_ctrl_indices = ctrl_indices_shuffled[:]
 
             # Create subsets
             if len(val_pert_indices) > 0:
