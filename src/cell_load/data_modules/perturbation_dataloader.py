@@ -100,10 +100,11 @@ class PerturbationDataModule(LightningDataModule):
         self.normalize_counts = kwargs.get("normalize_counts", False)
         self.store_raw_basal = kwargs.get("store_raw_basal", False)
         self.barcode = kwargs.get("barcode", False)
+        self.zeroshot_controls = kwargs.get("zeroshot_controls", False)
 
-        logger.info(
-            f"Initializing DataModule: batch_size={batch_size}, workers={num_workers}, "
-            f"random_seed={random_seed}"
+        print(
+            f"Initializing DataModule: batch_size={batch_size}, workers={num_workers}, ",
+            f"random_seed={random_seed}, zeroshot_controls={self.zeroshot_controls}"
         )
 
         # Mapping strategy
@@ -188,6 +189,7 @@ class PerturbationDataModule(LightningDataModule):
             "normalize_counts": self.normalize_counts,
             "store_raw_basal": self.store_raw_basal,
             "barcode": self.barcode,
+            "zeroshot_controls": self.zeroshot_controls,
         }
 
         torch.save(save_dict, filepath)
@@ -227,6 +229,7 @@ class PerturbationDataModule(LightningDataModule):
             "normalize_counts": save_dict.pop("normalize_counts", False),
             "store_raw_basal": save_dict.pop("store_raw_basal", False),
             "barcode": save_dict.pop("barcode", True),
+            "zeroshot_controls": save_dict.pop("zeroshot_controls", False),
         }
 
         # Create new instance with all the saved parameters
@@ -514,6 +517,9 @@ class PerturbationDataModule(LightningDataModule):
                     ctrl_mask = cache.pert_codes[ct_indices] == cache.control_pert_code
                     ctrl_indices = ct_indices[ctrl_mask]
                     pert_indices = ct_indices[~ctrl_mask]
+
+                    if self.zeroshot_controls:
+                        pert_indices = ct_indices
 
                     # Determine how to handle this cell type
                     counts = self._process_celltype(
