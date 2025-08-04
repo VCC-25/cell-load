@@ -241,7 +241,7 @@ class PerturbationDataModule(LightningDataModule):
         return cls(**save_dict, **kwargs)
 
     def get_var_dims(self):
-        underlying_ds: PerturbationDataset = self.test_datasets[0].dataset
+        underlying_ds: PerturbationDataset = self.train_datasets[0].dataset
         if self.embed_key:
             input_dim = underlying_ds.get_dim_for_obsm(self.embed_key)
         else:
