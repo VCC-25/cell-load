@@ -5,6 +5,7 @@ import h5py
 import numpy as np
 import torch
 from torch.utils.data import Dataset, Subset
+import anndata as ad
 
 from ..mapping_strategies import BaseMappingStrategy
 from ..utils.data_utils import (
@@ -40,6 +41,8 @@ class PerturbationDataset(Dataset):
         should_yield_control_cells: bool = True,
         store_raw_basal: bool = False,
         barcode: bool = False,
+        ranking_loss: bool = False,
+        de_loss: bool = False,
         **kwargs,
     ):
         """
@@ -69,6 +72,8 @@ class PerturbationDataset(Dataset):
         self.rng = np.random.default_rng(random_state)
         self.mapping_strategy = mapping_strategy
         self.pert_onehot_map = pert_onehot_map
+        self.de_map = ad.read_h5ad(self.h5_path).uns["de_labels"] if de_loss else None
+        self.rank_map = ad.read_h5ad(self.h5_path).uns["rank_embedding"] if ranking_loss else None
         self.batch_onehot_map = batch_onehot_map
         self.cell_type_onehot_map = cell_type_onehot_map
         self.pert_col = pert_col
@@ -175,6 +180,17 @@ class PerturbationDataset(Dataset):
             if self.cell_type_onehot_map
             else None
         )
+        
+        
+        # Differential Expression info
+        de_target = (
+            self.de_map.get(f"{cell_type}_{pert_name}") if self.de_map else None
+        )
+        
+        # Ranking info
+        rank_target = (
+            self.rank_map.get(f"{cell_type}_{pert_name}") if self.rank_map else None
+        )
 
         # Batch info
         batch_code = self.metadata_cache.batch_codes[file_idx]
@@ -192,6 +208,8 @@ class PerturbationDataset(Dataset):
             "batch": batch_onehot,
             "cell_type": cell_type,
             "cell_type_onehot": cell_type_onehot,
+            "de_target": de_target,
+            "rank_target": rank_target,
         }
 
         # Optionally include raw expressions for the perturbed cell, for training a decoder
@@ -411,11 +429,15 @@ class PerturbationDataset(Dataset):
         cell_type_onehot_list = [None] * batch_size
         batch_list = [None] * batch_size
         batch_name_list = [None] * batch_size
+        batch_de_target_list = [None] * batch_size
+        batch_rank_target_list = [None] * batch_size
 
         # Check if optional fields exist
         has_pert_cell_counts = "pert_cell_counts" in batch[0]
         has_ctrl_cell_counts = "ctrl_cell_counts" in batch[0]
         has_barcodes = "pert_cell_barcode" in batch[0]
+        has_de_target = "de_target" in batch[0]
+        has_rank_target = "rank_target" in batch[0]
 
         # Preallocate optional lists if needed
         if has_pert_cell_counts:
@@ -448,6 +470,12 @@ class PerturbationDataset(Dataset):
             if has_barcodes:
                 pert_cell_barcode_list[i] = item["pert_cell_barcode"]
                 ctrl_cell_barcode_list[i] = item["ctrl_cell_barcode"]
+                
+            if has_de_target:
+                batch_de_target_list[i] = item["de_target"]
+
+            if has_rank_target:
+                batch_rank_target_list[i] = item["rank_target"]
 
         # Create batch dictionary
         batch_dict = {
@@ -506,6 +534,12 @@ class PerturbationDataset(Dataset):
         if has_barcodes:
             batch_dict["pert_cell_barcode"] = pert_cell_barcode_list
             batch_dict["ctrl_cell_barcode"] = ctrl_cell_barcode_list
+
+        if has_de_target:
+            batch_dict["de_target"] = torch.stack(batch_de_target_list)
+
+        if has_rank_target:
+            batch_dict["rank_target"] = torch.stack(batch_rank_target_list)
 
         return batch_dict
 

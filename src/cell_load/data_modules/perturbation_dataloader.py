@@ -102,6 +102,8 @@ class PerturbationDataModule(LightningDataModule):
         # Optional behaviors
         self.map_controls = kwargs.get("map_controls", True)
         self.perturbation_features_file = kwargs.get("perturbation_features_file")
+        self.ranking_loss = kwargs.get("ranking_loss", False)
+        self.de_loss = kwargs.get("differential_expression_loss", False)
         self.int_counts = kwargs.get("int_counts", False)
         self.normalize_counts = kwargs.get("normalize_counts", False)
         self.store_raw_basal = kwargs.get("store_raw_basal", False)
@@ -135,6 +137,8 @@ class PerturbationDataModule(LightningDataModule):
 
         self.all_perts: Set[str] = set()
         self.pert_onehot_map: dict[str, torch.Tensor] | None = None
+        self.de_map: dict[str, torch.Tensor] | None = None
+        self.rank_map: dict[str, torch.Tensor] | None = None
         self.batch_onehot_map: dict[str, torch.Tensor] | None = None
         self.cell_type_onehot_map: dict[str, torch.Tensor] | None = None
 
@@ -195,6 +199,8 @@ class PerturbationDataModule(LightningDataModule):
             "normalize_counts": self.normalize_counts,
             "store_raw_basal": self.store_raw_basal,
             "barcode": self.barcode,
+            "ranking_loss": self.ranking_loss,
+            "de_loss": self.de_loss,
         }
 
         torch.save(save_dict, filepath)
@@ -437,6 +443,7 @@ class PerturbationDataModule(LightningDataModule):
         else:
             # Fall back to default: generate one-hot mapping
             self.pert_onehot_map = generate_onehot_map(all_perts)
+            
 
         self.batch_onehot_map = generate_onehot_map(all_batches)
         self.cell_type_onehot_map = generate_onehot_map(all_celltypes)
@@ -472,6 +479,8 @@ class PerturbationDataModule(LightningDataModule):
             output_space=self.output_space,
             store_raw_basal=self.store_raw_basal,
             barcode=self.barcode,
+            ranking_loss=self.ranking_loss,
+            de_loss=self.de_loss,
         )
 
     def _setup_datasets(self):
