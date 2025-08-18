@@ -73,7 +73,9 @@ class PerturbationDataset(Dataset):
         self.mapping_strategy = mapping_strategy
         self.pert_onehot_map = pert_onehot_map
         self.de_map = ad.read_h5ad(self.h5_path).uns["de_labels"] if de_loss else None
-        self.rank_map = ad.read_h5ad(self.h5_path).uns["rank_embedding"] if ranking_loss else None
+        self.rank_map = (
+            ad.read_h5ad(self.h5_path).uns["rank_embedding"] if ranking_loss else None
+        )
         self.batch_onehot_map = batch_onehot_map
         self.cell_type_onehot_map = cell_type_onehot_map
         self.pert_col = pert_col
@@ -180,17 +182,18 @@ class PerturbationDataset(Dataset):
             if self.cell_type_onehot_map
             else None
         )
-        
-        
+
         # Differential Expression info
-        de_target = (
-            self.de_map.get(f"{cell_type}_{pert_name}") if self.de_map else None
-        )
-        
+        if pert_name == self.control_pert:
+            de_target = None
+        else:
+            de_target = torch.tensor(self.de_map[f"{cell_type}_{pert_name}"]) if self.de_map else None
+
         # Ranking info
-        rank_target = (
-            self.rank_map.get(f"{cell_type}_{pert_name}") if self.rank_map else None
-        )
+        if pert_name == self.control_pert:
+            rank_target = None
+        else:
+            rank_target = torch.tensor(self.rank_map[f"{cell_type}_{pert_name}"]) if self.rank_map else None
 
         # Batch info
         batch_code = self.metadata_cache.batch_codes[file_idx]
@@ -470,12 +473,16 @@ class PerturbationDataset(Dataset):
             if has_barcodes:
                 pert_cell_barcode_list[i] = item["pert_cell_barcode"]
                 ctrl_cell_barcode_list[i] = item["ctrl_cell_barcode"]
-                
+
             if has_de_target:
-                batch_de_target_list[i] = item["de_target"]
+                batch_de_target_list[i] = item["de_target"] if item["de_target"] is not None else torch.zeros(
+                    item["pert_cell_emb"].shape[0], dtype=torch.float32
+                )
 
             if has_rank_target:
-                batch_rank_target_list[i] = item["rank_target"]
+                batch_rank_target_list[i] = item["rank_target"] if item["rank_target"] is not None else torch.zeros(
+                    item["pert_cell_emb"].shape[0], dtype=torch.float32
+                )
 
         # Create batch dictionary
         batch_dict = {
