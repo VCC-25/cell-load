@@ -5,7 +5,7 @@ DATA_MODULE_DICT = dict(
 )
 
 
-def get_datamodule(name, kwargs, batch_size=None, cell_sentence_len=1):
+def get_datamodule(name, kwargs, batch_size=None, cell_sentence_len=1, **extra_kwargs):
     """
     Load data/lightning modules using TOML configuration.
 
@@ -26,4 +26,5 @@ def get_datamodule(name, kwargs, batch_size=None, cell_sentence_len=1):
     if "toml_config_path" not in kwargs:
         raise ValueError("toml_config_path must be provided in kwargs")
 
+    kwargs.update(extra_kwargs)
     return DATA_MODULE_DICT[name](**kwargs)
