@@ -51,6 +51,7 @@ class PerturbationDataModule(LightningDataModule):
         cell_sentence_len: int = 512,
         cache_perturbation_control_pairs: bool = False,
         drop_last: bool = False,
+        exclude_datasets: list[str] | None = None,
         **kwargs,  # missing perturbation_features_file  and store_raw_basal for backwards compatibility
     ):
         """
@@ -84,6 +85,7 @@ class PerturbationDataModule(LightningDataModule):
         self.random_seed = random_seed
         self.rng = np.random.default_rng(random_seed)
         self.drop_last = drop_last
+        self.exclude_datasets = exclude_datasets if exclude_datasets is not None else []
 
         # H5 field names
         self.pert_col = pert_col
@@ -148,7 +150,7 @@ class PerturbationDataModule(LightningDataModule):
         """
         if len(self.test_datasets) == 0:
             raise ValueError("No test datasets available to extract variable names.")
-        underlying_ds: PerturbationDataset = self.test_datasets[0].dataset
+        underlying_ds: PerturbationDataset = self.train_datasets[0].dataset
         return underlying_ds.get_gene_names(output_space=self.output_space)
 
     def setup(self, stage: str | None = None):
@@ -483,6 +485,11 @@ class PerturbationDataModule(LightningDataModule):
         for dataset_name in self.config.get_all_datasets():
             dataset_path = Path(self.config.datasets[dataset_name])
             files = self._find_dataset_files(dataset_path)
+            
+            logger.info(f"excluding datasets: {self.exclude_datasets}")
+            for name in self.exclude_datasets:
+                files.pop(name, f'Not Found in datasets: {name}')
+            print(f"files: {files}")
 
             # Get configuration for this dataset
             zeroshot_celltypes = self.config.get_zeroshot_celltypes(dataset_name)
