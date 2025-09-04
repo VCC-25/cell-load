@@ -288,7 +288,44 @@ def benchmark_memory_access(mmap_array: MemoryMappedArray,
         'batch_ops_per_sec': (n_samples // batch_size) / batch_time,
         'n_samples': n_samples
     }
+def predict_dataloader(self):
+    """Prediction DataLoader mit konsistenter Batch-Struktur"""
+    
+    dataset = self.predict_dataset
+    
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_size=self.batch_size,
+        shuffle=False,  # Wichtig für Prediction!
+        num_workers=self.num_workers,
+        pin_memory=True,
+        drop_last=False,  # Behalte alle Samples
+        collate_fn=self._prediction_collate_fn
+    )
 
+def _prediction_collate_fn(self, batch):
+    """Custom collate für Predictions mit Metadata-Tracking"""
+    
+    # Sammle X-Daten
+    X_list = [item['X'] for item in batch]
+    X_batch = torch.stack(X_list)
+    
+    # Sammle Metadata (wichtig!)
+    metadata_list = []
+    for item in batch:
+        if 'obs' in item:
+            metadata_list.append(item['obs'])
+        elif 'metadata' in item:
+            metadata_list.append(item['metadata'])
+        else:
+            # Fallback
+            metadata_list.append({'sample_id': item.get('sample_id', 'unknown')})
+    
+    return {
+        'X': X_batch,
+        'obs': metadata_list,  # Liste von Dicts
+        'metadata': metadata_list  # Backup
+    }
 # ============================================================================
 # INTEGRATION HELPERS - For existing cell_load components (Dan)
 # ============================================================================
