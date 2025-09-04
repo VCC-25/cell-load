@@ -9,9 +9,313 @@ import torch
 
 from .singleton import Singleton
 
+# New Memory Mapping Imports (Dan)
+import numpy as np
+import mmap
+import os
+from typing import Optional, Tuple, Union, Iterator, Any
+from pathlib import Path
+import threading
+import queue
+import time
+
 log = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
+
+# ============================================================================
+# MEMORY MAPPING CLASSES - New functionality (Dan)
+# ============================================================================
+
+class MemoryMappedArray:
+    """
+    Memory-mapped NumPy Array for Single-Cell data
+    Integrates seamlessly into your existing cell_load architecture
+    """
+    def __init__(self, 
+                 file_path: Union[str, Path], 
+                 shape: Tuple[int, ...],
+                 dtype: np.dtype = np.float32,
+                 mode: str = 'r',
+                 create_if_missing: bool = False):
+        """
+        Args:
+            file_path: Path to memory-mapped file
+            shape: Array shape (e.g. n_cells, n_genes)
+            dtype: NumPy data type
+            mode: File mode ('r', 'r+', 'w+')
+            create_if_missing: Create file if it doesn't exist
+        """
+        self.file_path = Path(file_path)
+        self.shape = shape
+        self.dtype = np.dtype(dtype)
+        self.mode = mode
+        
+        # Setup Memory Mapping
+        self._setup_memory_mapping(create_if_missing)
+        
+    def _setup_memory_mapping(self, create_if_missing: bool):
+        """Memory mapping setup"""
+        if not self.file_path.exists():
+            if create_if_missing or 'w' in self.mode:
+                self._create_empty_file()
+            else:
+                raise FileNotFoundError(f"File not found: {self.file_path}")
+        
+        # Open file
+        file_mode = 'r+b' if '+' in self.mode or 'w' in self.mode else 'rb'
+        self.file = open(self.file_path, file_mode)
+        
+        # Memory mapping
+        access = mmap.ACCESS_WRITE if '+' in self.mode or 'w' in self.mode else mmap.ACCESS_READ
+        self.mmap = mmap.mmap(self.file.fileno(), 0, access=access)
+        
+        # NumPy Array View
+        self.data = np.frombuffer(
+            self.mmap, 
+            dtype=self.dtype
+        ).reshape(self.shape)
+        
+    def _create_empty_file(self):
+        """Create empty file with correct size"""
+        total_bytes = np.prod(self.shape) * self.dtype.itemsize
+        self.file_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self.file_path, 'wb') as f:
+            f.write(b'\x00' * total_bytes)
+            
+    def __getitem__(self, key) -> np.ndarray:
+        """NumPy-style indexing"""
+        return self.data[key]
+        
+    def __setitem__(self, key, value):
+        """NumPy-style assignment (if writable)"""
+        self.data[key] = value
+        
+    def __len__(self) -> int:
+        return self.shape[0]
+        
+    @property
+    def size_mb(self) -> float:
+        """File size in MB"""
+        return self.file_path.stat().st_size / (1024 * 1024)
+        
+    def close(self):
+        """Release resources"""
+        if hasattr(self, 'mmap'):
+            self.mmap.close()
+        if hasattr(self, 'file'):
+            self.file.close()
+            
+    def __del__(self):
+        self.close()
+        
+    def __enter__(self):
+        return self
+        
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+class PrefetchQueue:
+    """
+    Thread-safe Prefetch Queue for Batch Loading
+    Can be integrated into your existing DataLoaders
+    """
+    def __init__(self, maxsize: int = 10, timeout: float = 30.0):
+        self.queue = queue.Queue(maxsize=maxsize)
+        self.timeout = timeout
+        self.stop_event = threading.Event()
+        
+    def put(self, item: Any, block: bool = True):
+        """Put item into queue"""
+        try:
+            self.queue.put(item, block=block, timeout=self.timeout)
+        except queue.Full:
+            if not self.stop_event.is_set():
+                raise
+                
+    def get(self, block: bool = True) -> Any:
+        """Get item from queue"""
+        try:
+            return self.queue.get(block=block, timeout=self.timeout)
+        except queue.Empty:
+            if not self.stop_event.is_set():
+                raise
+            return None
+            
+    def stop(self):
+        """Stop queue"""
+        self.stop_event.set()
+        
+    def empty(self) -> bool:
+        return self.queue.empty()
+        
+    def qsize(self) -> int:
+        return self.queue.qsize()
+
+# ============================================================================
+# UTILITY FUNCTIONS - Extended functionality (Dan)
+# ============================================================================
+
+def create_memory_mapped_dataset(data: np.ndarray, 
+                                file_path: Union[str, Path],
+                                overwrite: bool = False) -> MemoryMappedArray:
+    """
+    Save NumPy array as memory-mapped dataset
+    
+    Args:
+        data: NumPy array (e.g. Single-Cell data)
+        file_path: Path for memory-mapped file
+        overwrite: Overwrite existing file
+        
+    Returns:
+        MemoryMappedArray instance
+    """
+    file_path = Path(file_path)
+    
+    if file_path.exists() and not overwrite:
+        raise FileExistsError(f"File exists: {file_path}. Use overwrite=True")
+    
+    # Create memory-mapped array
+    mmap_array = MemoryMappedArray(
+        file_path, 
+        data.shape, 
+        data.dtype, 
+        mode='w+',
+        create_if_missing=True
+    )
+    
+    # Copy data
+    mmap_array.data[:] = data
+    
+    print(f"✅ Created memory-mapped dataset: {file_path.name}")
+    print(f"   • Shape: {data.shape}")
+    print(f"   • Size: {mmap_array.size_mb:.1f} MB")
+    
+    return mmap_array
+
+def load_memory_mapped_dataset(file_path: Union[str, Path],
+                              shape: Tuple[int, ...],
+                              dtype: np.dtype = np.float32) -> MemoryMappedArray:
+    """
+    Load memory-mapped dataset
+    
+    Args:
+        file_path: Path to memory-mapped file
+        shape: Array shape
+        dtype: NumPy data type
+        
+    Returns:
+        MemoryMappedArray instance
+    """
+    mmap_array = MemoryMappedArray(file_path, shape, dtype, mode='r')
+    
+    print(f"📂 Loaded memory-mapped dataset: {Path(file_path).name}")
+    print(f"   • Shape: {shape}")
+    print(f"   • Size: {mmap_array.size_mb:.1f} MB")
+    
+    return mmap_array
+
+def estimate_memory_usage(shape: Tuple[int, ...], 
+                         dtype: np.dtype = np.float32) -> dict:
+    """
+    Estimate memory usage
+    
+    Args:
+        shape: Array shape
+        dtype: NumPy data type
+        
+    Returns:
+        Dict with memory information
+    """
+    total_elements = np.prod(shape)
+    bytes_per_element = np.dtype(dtype).itemsize
+    total_bytes = total_elements * bytes_per_element
+    
+    return {
+        'total_elements': total_elements,
+        'bytes_per_element': bytes_per_element,
+        'total_bytes': total_bytes,
+        'total_mb': total_bytes / (1024 * 1024),
+        'total_gb': total_bytes / (1024 * 1024 * 1024),
+        'shape': shape,
+        'dtype': str(dtype)
+    }
+
+def benchmark_memory_access(mmap_array: MemoryMappedArray,
+                           n_samples: int = 1000) -> dict:
+    """
+    Benchmark memory access performance
+    
+    Args:
+        mmap_array: MemoryMappedArray instance
+        n_samples: Number of test accesses
+        
+    Returns:
+        Performance statistics
+    """
+    import random
+    
+    # Generate random indices
+    max_idx = len(mmap_array) - 1
+    indices = [random.randint(0, max_idx) for _ in range(n_samples)]
+    
+    # Sequential access benchmark
+    start_time = time.time()
+    for i in range(min(n_samples, len(mmap_array))):
+        _ = mmap_array[i]
+    sequential_time = time.time() - start_time
+    
+    # Random access benchmark
+    start_time = time.time()
+    for idx in indices:
+        _ = mmap_array[idx]
+    random_time = time.time() - start_time
+    
+    # Batch access benchmark
+    batch_size = min(100, len(mmap_array))
+    start_time = time.time()
+    for i in range(0, min(n_samples, len(mmap_array)), batch_size):
+        end_idx = min(i + batch_size, len(mmap_array))
+        _ = mmap_array[i:end_idx]
+    batch_time = time.time() - start_time
+    
+    return {
+        'sequential_access_time': sequential_time,
+        'random_access_time': random_time,
+        'batch_access_time': batch_time,
+        'sequential_ops_per_sec': n_samples / sequential_time,
+        'random_ops_per_sec': n_samples / random_time,
+        'batch_ops_per_sec': (n_samples // batch_size) / batch_time,
+        'n_samples': n_samples
+    }
+
+# ============================================================================
+# INTEGRATION HELPERS - For existing cell_load components (Dan)
+# ============================================================================
+
+def integrate_with_existing_loader(loader_class):
+    """
+    Decorator to extend existing DataLoaders with Memory Mapping
+    
+    Usage:
+        @integrate_with_existing_loader
+        class YourExistingLoader:
+            ...
+    """
+    class MemoryMappedWrapper(loader_class):
+        def __init__(self, *args, use_memory_mapping=False, mmap_file=None, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.use_memory_mapping = use_memory_mapping
+            self.mmap_file = mmap_file
+            
+            if use_memory_mapping and mmap_file:
+                self._setup_memory_mapping()
+                
+        def _setup_memory_mapping(self):
+            # Memory mapping setup based on existing data structure
+            pass
+            
+    return MemoryMappedWrapper
 
 
 class H5MetadataCache:

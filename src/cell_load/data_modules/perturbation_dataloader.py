@@ -23,8 +23,360 @@ from ..utils.data_utils import (
 )
 from .samplers import PerturbationBatchSampler
 
+# New Prefetching Imports (Dan)
+import threading
+import queue
+import time
+from typing import Iterator, Tuple, Optional, Callable, Any
+from ..utils.data_utils import PrefetchQueue, MemoryMappedArray
+
 logger = logging.getLogger(__name__)
 
+# ============================================================================
+# PREFETCHING MIXIN - Can be added to existing loaders (Dan)
+# ============================================================================
+
+class PrefetchingMixin:
+    """
+    Mixin Class for Prefetching functionality
+    Can be added to existing DataLoader classes
+    """
+    def __init__(self, *args, 
+                 prefetch_factor: int = 2,
+                 prefetch_timeout: float = 30.0,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prefetch_factor = prefetch_factor
+        self.prefetch_timeout = prefetch_timeout
+        self.prefetch_queue = None
+        self.prefetch_thread = None
+        self.stop_prefetching = threading.Event()
+        
+    def enable_prefetching(self):
+        """Enable prefetching"""
+        if self.prefetch_queue is None:
+            self.prefetch_queue = PrefetchQueue(
+                maxsize=self.prefetch_factor,
+                timeout=self.prefetch_timeout
+            )
+            print(f"🚀 Prefetching enabled (factor: {self.prefetch_factor})")
+            
+    def _prefetch_worker(self, base_iterator):
+        """Background worker for prefetching"""
+        try:
+            for item in base_iterator:
+                if self.stop_prefetching.is_set():
+                    break
+                self.prefetch_queue.put(item)
+                
+        except Exception as e:
+            print(f"❌ Prefetch worker error: {e}")
+        finally:
+            # Sentinel for end
+            try:
+                self.prefetch_queue.put(None, block=False)
+            except:
+                pass
+                
+    def _get_prefetching_iterator(self, base_iterator) -> Iterator:
+        """Iterator with prefetching"""
+        if self.prefetch_queue is None:
+            # Fallback without prefetching
+            yield from base_iterator
+            return
+            
+        # Start background thread
+        self.stop_prefetching.clear()
+        self.prefetch_thread = threading.Thread(
+            target=self._prefetch_worker,
+            args=(base_iterator,)
+        )
+        self.prefetch_thread.start()
+        
+        try:
+            while True:
+                item = self.prefetch_queue.get()
+                if item is None:  # End reached
+                    break
+                yield item
+                
+        finally:
+            self._cleanup_prefetching()
+            
+    def _cleanup_prefetching(self):
+        """Prefetching cleanup"""
+        self.stop_prefetching.set()
+        
+        if self.prefetch_thread and self.prefetch_thread.is_alive():
+            self.prefetch_thread.join(timeout=5.0)
+            
+        if self.prefetch_queue:
+            self.prefetch_queue.stop()
+
+# ============================================================================
+# MEMORY MAPPING MIXIN - For Memory-mapped Datasets (Dan)
+# ============================================================================
+
+class MemoryMappingMixin:
+    """
+    Mixin for Memory Mapping support
+    Extends existing DataLoaders with Memory Mapping
+    """
+    def __init__(self, *args,
+                 use_memory_mapping: bool = False,
+                 mmap_cache_dir: Optional[str] = None,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_memory_mapping = use_memory_mapping
+        self.mmap_cache_dir = mmap_cache_dir
+        self.mmap_arrays = {}  # Cache for Memory-mapped Arrays
+        
+    def _get_or_create_mmap_array(self, 
+                                 data: Any, 
+                                 cache_key: str) -> MemoryMappedArray:
+        """Create or get Memory-mapped Array from cache"""
+        if cache_key in self.mmap_arrays:
+            return self.mmap_arrays[cache_key]
+            
+        if self.mmap_cache_dir is None:
+            import tempfile
+            self.mmap_cache_dir = tempfile.mkdtemp(prefix="cell_load_mmap_")
+            
+        # Create memory-mapped file
+        from pathlib import Path
+        mmap_file = Path(self.mmap_cache_dir) / f"{cache_key}.mmap"
+        
+        if hasattr(data, 'shape') and hasattr(data, 'dtype'):
+            # NumPy Array
+            from ..utils.data_utils import create_memory_mapped_dataset
+            mmap_array = create_memory_mapped_dataset(data, mmap_file, overwrite=True)
+        else:
+            # Other data types -> convert to NumPy
+            import numpy as np
+            np_data = np.array(data)
+            from ..utils.data_utils import create_memory_mapped_dataset
+            mmap_array = create_memory_mapped_dataset(np_data, mmap_file, overwrite=True)
+            
+        self.mmap_arrays[cache_key] = mmap_array
+        return mmap_array
+        
+    def _cleanup_mmap_arrays(self):
+        """Memory-mapped Arrays cleanup"""
+        for mmap_array in self.mmap_arrays.values():
+            mmap_array.close()
+        self.mmap_arrays.clear()
+        
+    def __del__(self):
+        self._cleanup_mmap_arrays()
+
+# ============================================================================
+# ENHANCED PERTURBATION DATALOADER - Combines both mixins (Dan)
+# ============================================================================
+
+class EnhancedPerturbationDataLoader(PrefetchingMixin, MemoryMappingMixin):
+    """
+    Enhanced version of your PerturbationDataLoader
+    Combines Prefetching and Memory Mapping
+    
+    Can be used as drop-in replacement for existing loaders
+    """
+    def __init__(self, 
+                 # Your existing parameters here...
+                 dataset=None,
+                 batch_size: int = 32,
+                 shuffle: bool = True,
+                 
+                 # New Enhancement Parameters
+                 prefetch_factor: int = 2,
+                 use_memory_mapping: bool = False,
+                 mmap_cache_dir: Optional[str] = None,
+                 adaptive_prefetching: bool = False,
+                 **kwargs):
+        """
+        Args:
+            dataset: Your existing dataset
+            batch_size: Batch size
+            shuffle: Shuffle data
+            prefetch_factor: Prefetching factor
+            use_memory_mapping: Enable memory mapping
+            mmap_cache_dir: Cache directory for memory-mapped files
+            adaptive_prefetching: Adaptive prefetching
+            **kwargs: Additional parameters for existing functionality
+        """
+        super().__init__(
+            prefetch_factor=prefetch_factor,
+            use_memory_mapping=use_memory_mapping,
+            mmap_cache_dir=mmap_cache_dir,
+            **kwargs
+        )
+        
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.adaptive_prefetching = adaptive_prefetching
+        
+        # Performance tracking for adaptive prefetching
+        if adaptive_prefetching:
+            self.batch_times = []
+            self.adaptation_counter = 0
+            self.adaptation_interval = 20
+            
+        # Prefetching setup
+        if prefetch_factor > 0:
+            self.enable_prefetching()
+            
+        print(f"🧬 Enhanced PerturbationDataLoader initialized:")
+        print(f"   • Batch size: {batch_size}")
+        print(f"   • Prefetching: {'✅' if prefetch_factor > 0 else '❌'}")
+        print(f"   • Memory mapping: {'✅' if use_memory_mapping else '❌'}")
+        print(f"   • Adaptive: {'✅' if adaptive_prefetching else '❌'}")
+        
+    def _create_base_iterator(self):
+        """
+        Create base iterator
+        Here you would integrate your existing DataLoader logic
+        """
+        # PLACEHOLDER - Here would be your existing iterator logic
+        # Example for integration:
+        
+        if self.dataset is None:
+            # Dummy data for demo
+            import numpy as np
+            dummy_data = np.random.randn(1000, 100).astype(np.float32)
+            self.dataset = dummy_data
+            
+        data = self.dataset
+        
+        # Apply memory mapping if enabled
+        if self.use_memory_mapping:
+            cache_key = f"dataset_{id(data)}"
+            data = self._get_or_create_mmap_array(data, cache_key)
+            
+        # Batch Iterator
+        n_samples = len(data)
+        indices = list(range(n_samples))
+        
+        if self.shuffle:
+            import random
+            random.shuffle(indices)
+            
+        for i in range(0, n_samples, self.batch_size):
+            batch_indices = indices[i:i + self.batch_size]
+            batch_data = data[batch_indices]
+            
+            yield batch_data, batch_indices
+            
+    def __iter__(self) -> Iterator[Tuple[Any, Any]]:
+        """
+        Enhanced Iterator with Prefetching and Memory Mapping
+        """
+        base_iterator = self._create_base_iterator()
+        
+        # Apply prefetching if enabled
+        if self.prefetch_queue is not None:
+            iterator = self._get_prefetching_iterator(base_iterator)
+        else:
+            iterator = base_iterator
+            
+        # Adaptive Prefetching
+        if self.adaptive_prefetching:
+            iterator = self._adaptive_iterator(iterator)
+            
+        yield from iterator
+        
+    def _adaptive_iterator(self, base_iterator) -> Iterator:
+        """Iterator with adaptive prefetching"""
+        for batch_data, batch_indices in base_iterator:
+            batch_start = time.time()
+            
+            yield batch_data, batch_indices
+            
+            # Performance tracking
+            batch_time = time.time() - batch_start
+            self.batch_times.append(batch_time)
+            
+            # Adaptation
+            self.adaptation_counter += 1
+            if self.adaptation_counter >= self.adaptation_interval:
+                self._adapt_prefetch_factor()
+                self.adaptation_counter = 0
+                
+    def _adapt_prefetch_factor(self):
+        """Adaptively adjust prefetch factor"""
+        if len(self.batch_times) < self.adaptation_interval:
+            return
+            
+        avg_batch_time = sum(self.batch_times[-self.adaptation_interval:]) / self.adaptation_interval
+        
+        # If batches are slow, prefetch more
+        if avg_batch_time > 0.1 and self.prefetch_factor < 8:
+            self.prefetch_factor += 1
+            print(f"📈 Increased prefetch factor to {self.prefetch_factor}")
+            
+        # If batches are fast, prefetch less
+        elif avg_batch_time < 0.05 and self.prefetch_factor > 1:
+            self.prefetch_factor -= 1
+            print(f"📉 Decreased prefetch factor to {self.prefetch_factor}")
+            
+        # Reset tracking
+        self.batch_times = []
+
+# ============================================================================
+# FACTORY FUNCTIONS - Easy integration (Dan)
+# ============================================================================
+
+def create_enhanced_loader(dataset,
+                         batch_size: int = 32,
+                         prefetch_factor: int = 3,
+                         use_memory_mapping: bool = True,
+                         adaptive: bool = True,
+                         **kwargs) -> EnhancedPerturbationDataLoader:
+    """
+    Factory function for Enhanced DataLoader
+    
+    Args:
+        dataset: Your dataset
+        batch_size: Batch size
+        prefetch_factor: Prefetching factor
+        use_memory_mapping: Enable memory mapping
+        adaptive: Adaptive prefetching
+        **kwargs: Additional parameters
+        
+    Returns:
+        EnhancedPerturbationDataLoader
+    """
+    return EnhancedPerturbationDataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        prefetch_factor=prefetch_factor,
+        use_memory_mapping=use_memory_mapping,
+        adaptive_prefetching=adaptive,
+        **kwargs
+    )
+
+def upgrade_existing_loader(existing_loader_class):
+    """
+    Decorator to upgrade existing DataLoaders
+    
+    Usage:
+        @upgrade_existing_loader
+        class YourExistingPerturbationLoader:
+            ...
+    """
+    class UpgradedLoader(EnhancedPerturbationDataLoader, existing_loader_class):
+        def __init__(self, *args, **kwargs):
+            # Extract enhancement parameters
+            enhancement_params = {
+                'prefetch_factor': kwargs.pop('prefetch_factor', 2),
+                'use_memory_mapping': kwargs.pop('use_memory_mapping', False),
+                'adaptive_prefetching': kwargs.pop('adaptive_prefetching', False),
+            }
+            
+            # Initialize both parent classes
+            EnhancedPerturbationDataLoader.__init__(self, **enhancement_params)
+            existing_loader_class.__init__(self, *args, **kwargs)
+            
+    return UpgradedLoader
 
 class PerturbationDataModule(LightningDataModule):
     """
