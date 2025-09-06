@@ -305,8 +305,14 @@ def predict_dataloader(self):
 
 def _prediction_collate_fn(self, batch):
     """Custom collate für Predictions mit Metadata-Tracking"""
+    X_list = [item['X'] for item in batch]
+    metadata_list = [item['obs'] for item in batch]  # Nur Batch-Metadata!
     
-    # Sammle X-Daten
+    return {
+        'X': torch.stack(X_list),      # [batch_size, features]
+        'obs': metadata_list           # [batch_size] Liste von Dicts
+    }
+    '''# Sammle X-Daten
     X_list = [item['X'] for item in batch]
     X_batch = torch.stack(X_list)
     
@@ -325,7 +331,7 @@ def _prediction_collate_fn(self, batch):
         'X': X_batch,
         'obs': metadata_list,  # Liste von Dicts
         'metadata': metadata_list  # Backup
-    }
+    }'''
 # ============================================================================
 # INTEGRATION HELPERS - For existing cell_load components (Dan)
 # ============================================================================
