@@ -1447,5 +1447,7 @@ class PerturbationDataModule(LightningDataModule):
         return PerturbationDataModule(
             toml_config_path=toml_config_path,
             batch_size=batch_size,
+            use_scplode=True,
+            enhanced_dataloaders=True
             **final_settings
         )
