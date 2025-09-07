@@ -903,7 +903,7 @@ class PerturbationDataModule(LightningDataModule):
         # NEU: Create enhanced dataloader
         return self._create_enhanced_dataloader(combined_dataset, shuffle=True)
 
-    def val_dataloader(self) -> DataLoader:
+    '''def val_dataloader(self) -> DataLoader:
         """Create validation dataloader with enhancements"""
         if not self.val_datasets:
             self.setup("val")
@@ -913,7 +913,27 @@ class PerturbationDataModule(LightningDataModule):
         
         # NEU: Create enhanced dataloader
         return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
-
+'''
+    def val_dataloader(self) -> DataLoader:
+        """Create validation dataloader with enhancements"""
+        if not self.val_datasets:
+            logger.warning("No validation datasets found. Trying to setup...")
+            self.setup("val") 
+            
+        if not self.val_datasets:
+            logger.warning("Still no validation datasets after setup. Using test datasets as fallback.")
+            if self.test_datasets:
+                # Fallback: Use test datasets for validation
+                combined_dataset = MetadataConcatDataset(self.test_datasets)
+                return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+            else:
+                logger.warning("No validation or test datasets available. Returning None.")
+                return None
+    
+        # Normal case: validation datasets exist
+        combined_dataset = MetadataConcatDataset(self.val_datasets)
+        return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+    
     def test_dataloader(self) -> DataLoader:
         """Create test dataloader with enhancements"""
         if not self.test_datasets:
@@ -1336,6 +1356,40 @@ class PerturbationDataModule(LightningDataModule):
 
         return counts
 
+    def get_h5_obs_count(fpath):
+        """Robuste Funktion um die Anzahl der Beobachtungen aus einer H5-Datei zu extrahieren"""
+        try:
+            with h5py.File(fpath, 'r') as f:
+                # Versuche verschiedene Standard-Pfade
+                possible_paths = [
+                    'obs/_index',           # Häufigster AnnData Pfad
+                    'obs/index',            # Alternative
+                    'X',                    # Fallback über X Matrix
+                    'X/data',               # Sparse Matrix
+                ]
+                
+                for path in possible_paths:
+                    try:
+                        obj = f
+                        for part in path.split('/'):
+                            obj = obj[part]
+                        
+                        if hasattr(obj, 'shape'):
+                            return obj.shape[0]
+                        elif hasattr(obj, 'attrs') and 'shape' in obj.attrs:
+                            return obj.attrs['shape'][0]
+                    except (KeyError, AttributeError):
+                        continue
+                
+                # Letzter Versuch: n_obs Attribut
+                if 'n_obs' in f.attrs:
+                    return f.attrs['n_obs']
+                    
+                return 0
+                
+        except Exception:
+            return 0
+    
     def _check_dataset_sizes(self):
         """Check dataset sizes and auto-enable scplode if needed"""
         total_cells = 0
@@ -1347,7 +1401,7 @@ class PerturbationDataModule(LightningDataModule):
                 files = self._find_dataset_files(dataset_path)
                 
                 for fname, fpath in files.items():
-                    try:
+                    '''try:
                         with h5py.File(fpath, 'r') as f:
                             n_obs = f['obs'].shape[0] if 'obs' in f else 0
                             total_cells += n_obs
@@ -1355,6 +1409,15 @@ class PerturbationDataModule(LightningDataModule):
                             if n_obs > 50000:  # Large file threshold
                                 large_files.append((fname, n_obs))
                                 
+                    except Exception as e:
+                        logger.warning(f"Could not check size of {fpath}: {e}")'''
+                    try:
+                        n_obs = get_h5_obs_count(fpath)
+                        total_cells += n_obs
+                        
+                        if n_obs > 50000:  # Large file threshold
+                            large_files.append((fname, n_obs))
+                            
                     except Exception as e:
                         logger.warning(f"Could not check size of {fpath}: {e}")
         except Exception as e:
