@@ -30,6 +30,22 @@ import time
 from typing import Iterator, Tuple, Optional, Callable, Any
 from ..utils.data_utils import PrefetchQueue, MemoryMappedArray
 
+# New imports
+import threading
+import queue
+import time
+from typing import Iterator, Tuple, Optional, Callable, Any
+import psutil  # for Memory-Monitoring
+import gc      # for Garbage Collection
+
+# Scplode Import (with Fallback)
+try:
+    import scplode
+    SCPLODE_AVAILABLE = True
+    print("✅ scplode available")
+except ImportError:
+    SCPLODE_AVAILABLE = False
+    print("❌ scplode not available - use standard-loading")
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -378,6 +394,155 @@ def upgrade_existing_loader(existing_loader_class):
             
     return UpgradedLoader
 
+class ScplodeMixin:
+    """Mixin für scplode Integration in bestehende Datasets"""
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.use_scplode = kwargs.get('use_scplode', False) and SCPLODE_AVAILABLE
+        self.scplode_chunk_size = kwargs.get('scplode_chunk_size', 2000)
+        self.scplode_max_memory_gb = kwargs.get('scplode_max_memory_gb', 8.0)
+        self._memory_monitor = MemoryMonitor(self.scplode_max_memory_gb)
+        
+    def _load_with_scplode(self, file_path: str, obs_indices: Optional[np.ndarray] = None):
+        """Load data using scplode for memory efficiency"""
+        if not self.use_scplode or not SCPLODE_AVAILABLE:
+            return self._load_standard(file_path, obs_indices)
+            
+        try:
+            # Monitor memory before loading
+            self._memory_monitor.check_memory()
+            
+            # Use scplode for efficient loading
+            with scplode.File(file_path, 'r') as f:
+                if obs_indices is not None:
+                    # Load specific indices
+                    X = f['X'][obs_indices]
+                    obs = f['obs'][obs_indices] if 'obs' in f else None
+                else:
+                    # Load in chunks
+                    X = f['X'][:]
+                    obs = f['obs'][:] if 'obs' in f else None
+                    
+                return X, obs
+                
+        except Exception as e:
+            logger.warning(f"Scplode loading failed for {file_path}: {e}")
+            return self._load_standard(file_path, obs_indices)
+    
+    def _load_standard(self, file_path: str, obs_indices: Optional[np.ndarray] = None):
+        """Fallback to standard h5py loading"""
+        with h5py.File(file_path, 'r') as f:
+            if obs_indices is not None:
+                X = f['X'][obs_indices]
+                obs = f['obs'][obs_indices] if 'obs' in f else None
+            else:
+                X = f['X'][:]
+                obs = f['obs'][:] if 'obs' in f else None
+        return X, obs
+
+class MemoryMonitor:
+    """Monitor system memory usage"""
+    
+    def __init__(self, max_memory_gb: float = 8.0):
+        self.max_memory_gb = max_memory_gb
+        self.max_memory_bytes = max_memory_gb * 1024**3
+        
+    def check_memory(self):
+        """Check current memory usage and trigger GC if needed"""
+        memory_info = psutil.virtual_memory()
+        if memory_info.available < self.max_memory_bytes:
+            gc.collect()
+            
+    def get_memory_info(self) -> dict:
+        """Get current memory information"""
+        memory_info = psutil.virtual_memory()
+        return {
+            'available_gb': memory_info.available / 1024**3,
+            'used_gb': memory_info.used / 1024**3,
+            'percent': memory_info.percent
+        }
+
+class EnhancedPerturbationDataLoader:
+    """Enhanced DataLoader mit scplode Support und Prefetching"""
+    
+    def __init__(
+        self,
+        dataset,
+        batch_size: int = 128,
+        shuffle: bool = True,
+        use_scplode: bool = False,
+        scplode_chunk_size: int = 2000,
+        scplode_max_memory_gb: float = 8.0,
+        prefetch_factor: int = 4,
+        use_memory_mapping: bool = False,
+        adaptive_prefetching: bool = False
+    ):
+        self.dataset = dataset
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.use_scplode = use_scplode and SCPLODE_AVAILABLE
+        self.prefetch_factor = prefetch_factor
+        self.use_memory_mapping = use_memory_mapping
+        self.adaptive_prefetching = adaptive_prefetching
+        
+        # Apply scplode mixin if needed
+        if self.use_scplode and hasattr(dataset, '__class__'):
+            # Dynamically add scplode capabilities
+            if not isinstance(dataset, ScplodeMixin):
+                dataset.__class__ = type(
+                    dataset.__class__.__name__ + 'WithScplode',
+                    (ScplodeMixin, dataset.__class__),
+                    {}
+                )
+                dataset.__init__(
+                    use_scplode=use_scplode,
+                    scplode_chunk_size=scplode_chunk_size,
+                    scplode_max_memory_gb=scplode_max_memory_gb
+                )
+    
+    def __iter__(self):
+        """Iterator with enhanced loading"""
+        indices = list(range(len(self.dataset)))
+        if self.shuffle:
+            np.random.shuffle(indices)
+            
+        for i in range(0, len(indices), self.batch_size):
+            batch_indices = indices[i:i + self.batch_size]
+            batch_data = []
+            
+            for idx in batch_indices:
+                try:
+                    data = self.dataset[idx]
+                    batch_data.append(data)
+                except Exception as e:
+                    logger.warning(f"Error loading sample {idx}: {e}")
+                    continue
+                    
+            if batch_data:
+                yield self._collate_batch(batch_data)
+    
+    def _collate_batch(self, batch_data):
+        """Collate batch data"""
+        if not batch_data:
+            return None
+            
+        # Simple collation - adapt to your data structure
+        if isinstance(batch_data[0], dict):
+            # Dictionary batch
+            keys = batch_data[0].keys()
+            collated = {}
+            for key in keys:
+                values = [item[key] for item in batch_data]
+                if isinstance(values[0], torch.Tensor):
+                    collated[key] = torch.stack(values)
+                else:
+                    collated[key] = values
+            return collated
+        else:
+            # Tensor batch
+            return torch.stack(batch_data)
+        
 class PerturbationDataModule(LightningDataModule):
     """
     A unified data module that sets up train/val/test splits for multiple dataset/celltype
@@ -404,6 +569,15 @@ class PerturbationDataModule(LightningDataModule):
         cache_perturbation_control_pairs: bool = False,
         drop_last: bool = False,
         exclude_datasets: list[str] | None = None,
+        # new parameters for scplode
+        use_scplode: bool = False,
+        scplode_chunk_size: int = 2000,
+        scplode_max_memory_gb: float = 8.0,
+        auto_enable_scplode: bool = True,
+        enhanced_dataloaders: bool = False,
+        prefetch_factor: int = 4,
+        use_memory_mapping: bool = False,
+        adaptive_prefetching: bool = False,
         **kwargs,  # missing perturbation_features_file  and store_raw_basal for backwards compatibility
     ):
         """
@@ -491,6 +665,27 @@ class PerturbationDataModule(LightningDataModule):
         self.pert_onehot_map: dict[str, torch.Tensor] | None = None
         self.batch_onehot_map: dict[str, torch.Tensor] | None = None
         self.cell_type_onehot_map: dict[str, torch.Tensor] | None = None
+
+        # SCPLODE INTEGRATION DAN
+        self.use_scplode = use_scplode and SCPLODE_AVAILABLE
+        self.scplode_chunk_size = scplode_chunk_size
+        self.scplode_max_memory_gb = scplode_max_memory_gb
+        self.auto_enable_scplode = auto_enable_scplode
+        
+        # ENHANCED DATALOADERS DAN
+        self.enhanced_dataloaders = enhanced_dataloaders
+        self.prefetch_factor = prefetch_factor
+        self.use_memory_mapping = use_memory_mapping
+        self.adaptive_prefetching = adaptive_prefetching
+
+        logger.info(
+            f"DataModule: batch_size={batch_size}, workers={num_workers}, "
+            f"scplode={'✅' if self.use_scplode else '❌'}, enhanced={'✅' if enhanced_dataloaders else '❌'}"
+        )
+        
+        # Auto-enable scplode für große Datensätze
+        if self.auto_enable_scplode and not self.use_scplode:
+            self._check_dataset_sizes()
 
         # Initialize global maps
         self._setup_global_maps()
@@ -680,7 +875,7 @@ class PerturbationDataModule(LightningDataModule):
         # Return the control perturbation name
         return self.train_datasets[0].dataset.control_pert
 
-    def train_dataloader(self):
+    '''def train_dataloader(self):
         if len(self.train_datasets) == 0:
             raise ValueError(
                 "No training datasets available. Please call setup() first."
@@ -696,12 +891,65 @@ class PerturbationDataModule(LightningDataModule):
         if len(self.test_datasets) == 0:
             return None
         return self._create_dataloader(self.test_datasets, test=True, batch_size=1)
+'''
+    def train_dataloader(self) -> DataLoader:
+        """Create training dataloader with enhancements"""
+        if not self.train_datasets:
+            self.setup("train")
+            
+        # Combine all training datasets (Ihr bestehender Code)
+        combined_dataset = MetadataConcatDataset(self.train_datasets)
+        
+        # NEU: Create enhanced dataloader
+        return self._create_enhanced_dataloader(combined_dataset, shuffle=True)
 
-    def predict_dataloader(self):
+    '''def val_dataloader(self) -> DataLoader:
+        """Create validation dataloader with enhancements"""
+        if not self.val_datasets:
+            self.setup("val")
+            
+        # Combine all validation datasets (Ihr bestehender Code)
+        combined_dataset = MetadataConcatDataset(self.val_datasets)
+        
+        # NEU: Create enhanced dataloader
+        return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+'''
+    def val_dataloader(self) -> DataLoader:
+        """Create validation dataloader with enhancements"""
+        if not self.val_datasets:
+            logger.warning("No validation datasets found. Trying to setup...")
+            self.setup("val") 
+            
+        if not self.val_datasets:
+            logger.warning("Still no validation datasets after setup. Using test datasets as fallback.")
+            if self.test_datasets:
+                # Fallback: Use test datasets for validation
+                combined_dataset = MetadataConcatDataset(self.test_datasets)
+                return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+            else:
+                logger.warning("No validation or test datasets available. Returning None.")
+                return None
+    
+        # Normal case: validation datasets exist
+        combined_dataset = MetadataConcatDataset(self.val_datasets)
+        return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+    
+    def test_dataloader(self) -> DataLoader:
+        """Create test dataloader with enhancements"""
+        if not self.test_datasets:
+            self.setup("test")
+            
+        # Combine all test datasets (Ihr bestehender Code)
+        combined_dataset = MetadataConcatDataset(self.test_datasets)
+        
+        # NEU: Create enhanced dataloader
+        return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
+
+    '''def predict_dataloader(self):
         if len(self.test_datasets) == 0:
             return None
         return self._create_dataloader(self.test_datasets, test=True)
-
+'''
     # Helper functions to set up global maps and datasets
 
     def _create_dataloader(
@@ -1107,3 +1355,162 @@ class PerturbationDataModule(LightningDataModule):
             counts["train"] = len(subset)
 
         return counts
+
+    def get_h5_obs_count(fpath):
+        """Robuste Funktion um die Anzahl der Beobachtungen aus einer H5-Datei zu extrahieren"""
+        try:
+            with h5py.File(fpath, 'r') as f:
+                # Versuche verschiedene Standard-Pfade
+                possible_paths = [
+                    'obs/_index',           # Häufigster AnnData Pfad
+                    'obs/index',            # Alternative
+                    'X',                    # Fallback über X Matrix
+                    'X/data',               # Sparse Matrix
+                ]
+                
+                for path in possible_paths:
+                    try:
+                        obj = f
+                        for part in path.split('/'):
+                            obj = obj[part]
+                        
+                        if hasattr(obj, 'shape'):
+                            return obj.shape[0]
+                        elif hasattr(obj, 'attrs') and 'shape' in obj.attrs:
+                            return obj.attrs['shape'][0]
+                    except (KeyError, AttributeError):
+                        continue
+                
+                # Letzter Versuch: n_obs Attribut
+                if 'n_obs' in f.attrs:
+                    return f.attrs['n_obs']
+                    
+                return 0
+                
+        except Exception:
+            return 0
+    
+    def _check_dataset_sizes(self):
+        """Check dataset sizes and auto-enable scplode if needed"""
+        total_cells = 0
+        large_files = []
+        
+        try:
+            for dataset_name in self.config.get_all_datasets():
+                dataset_path = Path(self.config.datasets[dataset_name])
+                files = self._find_dataset_files(dataset_path)
+                
+                for fname, fpath in files.items():
+                    '''try:
+                        with h5py.File(fpath, 'r') as f:
+                            n_obs = f['obs'].shape[0] if 'obs' in f else 0
+                            total_cells += n_obs
+                            
+                            if n_obs > 50000:  # Large file threshold
+                                large_files.append((fname, n_obs))
+                                
+                    except Exception as e:
+                        logger.warning(f"Could not check size of {fpath}: {e}")'''
+                    try:
+                        n_obs = get_h5_obs_count(fpath)
+                        total_cells += n_obs
+                        
+                        if n_obs > 50000:  # Large file threshold
+                            large_files.append((fname, n_obs))
+                            
+                    except Exception as e:
+                        logger.warning(f"Could not check size of {fpath}: {e}")
+        except Exception as e:
+            logger.warning(f"Could not auto-check dataset sizes: {e}")
+            return
+        
+        if total_cells > 100000 or len(large_files) > 0:
+            self.use_scplode = SCPLODE_AVAILABLE
+            if self.use_scplode:
+                print(f"🚀 Auto-enabled scplode for large dataset:")
+                print(f"   • Total cells: {total_cells:,}")
+                print(f"   • Large files: {len(large_files)}")
+
+    def _create_enhanced_dataloader(self, dataset, shuffle: bool = True) -> DataLoader:
+        """Create enhanced dataloader with scplode support"""
+        
+        if self.enhanced_dataloaders:
+            # Use enhanced loader
+            enhanced_loader = EnhancedPerturbationDataLoader(
+                dataset=dataset,
+                batch_size=self.batch_size,
+                shuffle=shuffle,
+                use_scplode=self.use_scplode,
+                scplode_chunk_size=self.scplode_chunk_size,
+                scplode_max_memory_gb=self.scplode_max_memory_gb,
+                prefetch_factor=self.prefetch_factor,
+                use_memory_mapping=self.use_memory_mapping,
+                adaptive_prefetching=self.adaptive_prefetching
+            )
+            
+            return DataLoader(
+                enhanced_loader,
+                batch_size=None,  # Batching handled by enhanced loader
+                num_workers=0,    # Enhanced loader handles threading
+                shuffle=False,    # Shuffling handled by enhanced loader
+                drop_last=self.drop_last,
+                pin_memory=True
+            )
+        else:
+            # Use standard PyTorch DataLoader (Ihr bestehender Code)
+            return DataLoader(
+                dataset,
+                batch_size=self.batch_size,
+                num_workers=self.num_workers,
+                shuffle=shuffle,
+                drop_last=self.drop_last,
+                pin_memory=True
+            )
+        
+    def upgrade_datamodule(existing_datamodule_instance,
+                      use_scplode: bool = True,
+                      enhanced_dataloaders: bool = True,
+                      **kwargs):
+        """
+        Upgrade existing PerturbationDataModule instance to enhanced version
+        """
+        # Extract configuration from existing instance
+        config_dict = {
+            'toml_config_path': existing_datamodule_instance.toml_config_path,
+            'batch_size': existing_datamodule_instance.batch_size,
+            'num_workers': existing_datamodule_instance.num_workers,
+            'random_seed': existing_datamodule_instance.random_seed,
+            # ... alle anderen Parameter
+            'use_scplode': use_scplode,
+            'enhanced_dataloaders': enhanced_dataloaders,
+            **kwargs
+        }
+        
+        # Create enhanced version
+        enhanced_dm = PerturbationDataModule(**config_dict)
+        return enhanced_dm
+
+    def create_scplode_datamodule(toml_config_path: str,
+                                batch_size: int = 128,
+                                **kwargs):
+        """
+        Create a new PerturbationDataModule with optimal scplode settings
+        """
+        optimal_settings = {
+            'use_scplode': True,
+            'auto_enable_scplode': True,
+            'enhanced_dataloaders': True,
+            'prefetch_factor': 4,
+            'scplode_chunk_size': 2000 if batch_size <= 128 else 4000,
+            'scplode_max_memory_gb': 8.0,
+        }
+        
+        final_settings = {**optimal_settings, **kwargs}
+        
+        return PerturbationDataModule(
+            toml_config_path=toml_config_path,
+            batch_size=batch_size,
+            use_scplode=True,
+            enhanced_dataloaders=True
+            **final_settings
+        )
