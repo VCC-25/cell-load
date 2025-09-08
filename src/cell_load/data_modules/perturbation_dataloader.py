@@ -925,7 +925,7 @@ class PerturbationDataModule(LightningDataModule):
             if self.test_datasets:
                 # Fallback: Use test datasets for validation
                 combined_dataset = MetadataConcatDataset(self.test_datasets)
-                return self._create_enhanced_dataloader(combined_dataset, shuffle=False, batch_size=self.batch_size)
+                return self._create_enhanced_dataloader(combined_dataset, shuffle=False)
             else:
                 logger.warning("No validation or test datasets available. Returning None.")
                 return None
